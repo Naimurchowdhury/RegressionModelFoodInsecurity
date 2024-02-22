@@ -4,7 +4,7 @@ library(readxl)
 library(MASS)
 library(leaps)
 library(glmnet)
-full_data = read_xlsx('/Users/yuhanhu/Documents/2nd_ISE/ISE 537/Project/MMG_SSH_Data/data.xlsx',
+full_data = read_xlsx('/data.xlsx',
                       col_names = c('y', 'insec_rate',
                                     'rate_black', 'rate_hispanic',
                                     'rate_non_hispanic',
