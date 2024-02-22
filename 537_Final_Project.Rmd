@@ -1,0 +1,317 @@
+---
+title: "ISE537_Final_Project"
+author: "Yuhan Hu"
+date: "2023-12-01"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(MASS)
+library(leaps)
+library(glmnet)
+full_data = read_xlsx('/Users/yuhanhu/Documents/2nd_ISE/ISE 537/Project/MMG_SSH_Data/data.xlsx',
+                 col_names = c('y', 'insec_rate',
+                               'rate_black', 'rate_hispanic',
+                               'rate_non_hispanic',
+                               'rate_senior',   'rate_senior_very_low',
+                               'rate_older', 'rate_older_very_low',
+                               'rate_child', 'percent_children',
+                               'cost_per_meal', 'percent_FI'), skip = 1)
+```
+
+**Impute missing values**
+```{r}
+for (i in 3:13) {
+    full_data[[i]][is.na(full_data[[i]])] <- mean(full_data[[i]], na.rm = TRUE)
+}
+```
+
+
+
+**Split data into training and testing data**
+```{r}
+testRows <- sample(nrow(full_data), 0.2*nrow(full_data))
+test <- full_data[testRows,]
+data <- full_data[-testRows,]
+```
+
+
+
+**EDA**
+*(1) Summary*
+```{r}
+library(dplyr)
+data %>% dplyr::select(-y) %>% summary()
+```
+
+
+*(2) Histograms for each independent variable*
+```{r}
+lapply(names(data %>% dplyr::select(-y)), function(colname) {
+    ggplot(data, aes_string(x = colname)) + 
+    geom_histogram(bins = 30) + 
+    xlab(colname) +
+    theme_minimal()
+})
+```
+
+*(3) Boxplot for each variable*
+```{r}
+par(mfrow = c(3, 4))
+for (i in 2:13) {
+    boxplot(y ~ data[[i]], main = "", xlab = names(data)[i], ylab = "Weighted weekly $ needed by FI", data = data)
+}
+```
+
+*(4) Correlation plot*
+```{r}
+library(corrplot)
+cor_matrix <- cor(data)
+corrplot(cor_matrix, method = "circle")
+```
+
+
+
+**Model Fitting**
+*1. Multiple regression model*
+*(1) Model fitting*
+```{r}
+# fit multiple regression model 
+full_model = lm(y~., data=data)
+summary(full_model)
+```
+
+
+*(2). residual analysis*
+*a. Scatter plot matrix of y and predicting variables*
+```{r}
+# linearity and correlation check
+#plot(data[,1:12])
+
+par(mfrow = c(3, 1)) 
+plot(data[,1:4])
+plot(data[,5:8])
+plot(data[,9:13])
+```
+
+
+*b. Standardized residuals vs individuals predicting variables*
+```{r}
+# linearity and constant variance check
+par(mfrow = c(3, 4)) 
+resids <- rstandard(full_model)
+for (i in 2:13) {
+    plot(data[[i]], resids, xlab = names(data)[i], ylab = "Standardized Residuals",
+         main = paste("Standardized Residuals vs", names(data)[i]))
+    abline(h = 0, col = "red")
+}
+```
+
+
+*c. Fitted values vs residuals, Q-Q plot, etc*
+```{r}
+library(car)
+resids <- rstandard(full_model)
+fits <- full_model$fitted
+cook <- cooks.distance(full_model)
+par(mfrow = c(1,1))
+plot(fits, resids, xlab = "Fitted Values", ylab = "Residuals")
+abline(0,0,col = "red")
+qqnorm(resids, ylab = "Residuals", main = "")
+qqline(resids, col = "red")
+hist(resids, xlab = "Residuals", main = "", nclass = 10, col = "orange")
+plot(cook, type = "h", lwd = 3, col = "red", ylab = "Cook's Distance")
+```
+# Based on the residual analysis, no nonlinearity, outliers, non-normality are detected. Thus, it is not necessary to do the transformation. 
+
+
+```{r}
+# model with significant coefficients
+model_significant <- lm(y~ insec_rate + rate_child + cost_per_meal + percent_FI, data=data)
+summary(model_significant)
+```
+
+```{r}
+# ANOVA 
+anova(model_significant, full_model)
+```
+
+# Since there are 12 predictors, there are 2^12 = 4096 total regression models. Thus, it is not practical to fit all the possible regressions. 
+
+
+
+*2. Stepwise regression model*
+
+*(1) Forward selection*
+```{r}
+minimal_model <- lm(y ~ 1, data = data)
+full_model <- lm(y ~ ., data = data)
+forward <- step(minimal_model, scope = list(lower = minimal_model, upper = full_model), direction = "forward")
+summary(forward)
+```
+
+
+*(2) Backward elimination*
+```{r}
+backward <- step(full_model, direction = "backward")
+summary(backward)
+```
+
+
+*(3) Stepwise regression*
+```{r}
+stepwise <- step(minimal_model, scope = list(lower = minimal_model, upper = full_model), direction = "both")
+summary(stepwise)
+```
+#Model comparison
+```{r}
+library(olsrr)
+m1 = c(summary(full_model)$adj.r.squared,ols_mallows_cp(full_model,full_model),AIC(full_model),BIC(full_model))
+m2 = c(summary(model_significant)$adj.r.squared,ols_mallows_cp(model_significant,full_model),AIC(model_significant),BIC(model_significant))
+m3 = c(summary(forward)$adj.r.squared,ols_mallows_cp(forward,full_model),AIC(forward),BIC(forward))
+m4 = c(summary(backward)$adj.r.squared,ols_mallows_cp(backward,full_model),AIC(backward),BIC(backward))
+m5 = c(summary(stepwise)$adj.r.squared,ols_mallows_cp(stepwise,full_model),AIC(stepwise),BIC(stepwise))
+
+d<-data.frame(rbind(m1,m2,m3,m4,m5))
+colnames(d) <- c("R-squared", "Cp", "AIC", "BIC")
+rownames(d) < c("model1", "model2", "model3","model4", "model5")
+d
+```
+
+
+
+# Based on the correlation plot, there is a significant multicollinearity problem. Thus, we further conduct ridge regression.
+
+**3. Ridge regression**
+```{r}
+library(MASS)
+# scale the predicting variables and the response variable X = data[,c(-1)]
+X = data[,c(-1)]
+x_scaled = scale(X)
+y_scaled = scale(data$y)
+
+# apply ridge regression for a range of penality constants
+lambda = seq(0,10,by = 0.25)
+ridge_model <- lm.ridge(y_scaled ~ x_scaled, lambda = lambda) 
+# lambda is selected to minimize the CV score 
+round(ridge_model$GCV)
+
+opt_lambda = which(ridge_model$GCV == min(ridge_model$GCV)) 
+opt_lambda
+
+# coefficient plot
+plot(lambda, ridge_model$coef[1,], type = 'l', col=1,lwd=3, xlab='Lambda', ylab='coefficient',
+     main='Plot of regression coefficients vs. Lambda Penality Ridge
+Regression',
+     ylim = c(min(ridge_model$coef), max(ridge_model$coef)))
+for(i in 2:12){
+  points(lambda, ridge_model$coef[i,], type='l', col=i, lwd=3)
+}
+ abline(v=opt_lambda,lty=2,lwd=3)
+```
+
+
+```{r}
+# extract the coefficient at the optimal lambda
+ridge_model$coef[,opt_lambda]
+```
+
+
+```{r}
+# coefficient plot
+library(glmnet)
+cv_ridge <- cv.glmnet(x = as.matrix(data[,-1]),
+                      y = data$y, alpha = 0,
+                      nfolds = 10)
+cv_ridge$lambda.min
+
+ridge_model <- glmnet(x = as.matrix(data[,-1]), 
+                      y = data$y,
+                      alpha = 0) 
+coef(ridge_model, s=cv_ridge$lambda.min)
+```
+
+
+
+*4. LASSO regression*
+```{r}
+library(glmnet)
+# Find the optimal lambda using 10-fold CV
+cv_lasso <- cv.glmnet(x_scaled, y_scaled, alpha = 1, nfolds = 10)
+# Get the best lambda value
+opt_lambda <- cv_lasso$lambda.min
+opt_lambda
+```
+
+```{r}
+# Fit the final model on the selected lambda
+lasso_best <- glmnet(x_scaled, y_scaled, alpha = 1, lambda = opt_lambda)
+lasso_coef <- coef(lasso_best)
+lasso_coef
+```
+
+```{r}
+lasso_model <- glmnet(x = as.matrix(data[,-1]), 
+                      y = data$y, family = 'gaussian',
+                      alpha = 1) 
+plot(lasso_model, xvar = "lambda", label = TRUE, lwd = 2)
+abline(v =log(cv_lasso$lambda.min), col= "black", lty = 2, lwd = 2)
+
+coef(lasso_model, s = cv_lasso$lambda.min)
+```
+
+
+*5. Elastic Net*
+```{r}
+library(glmnet)
+#find the optimal lambda using 10-fold CV
+cv_elastic <- cv.glmnet(x_scaled, y_scaled, alpha = 0.5, nfolds = 10)
+#fit elastic net model with 100 values for lambda
+elastic_model <- glmnet(x_scaled, y_scaled, alpha = 0.5, nlambda = 100)
+#plot coefficient paths
+coef(elastic_model, s = cv_elastic$lambda.min)
+```
+
+```{r}
+plot(elastic_model, xvar = "lambda", label = TRUE, lwd = 2)
+abline(v =log(cv_elastic$lambda.min), col= "black", lty = 2, lwd = 2)
+```
+
+
+*7. Model selection*
+#To select the best model, use the mean squared prediction error 
+```{r}
+test.pred1 <- predict(full_model, test, type = 'response')
+test.pred2 <- predict(model_significant, test, type = 'response')
+test.pred3 <- predict(forward, test, type = 'response')
+test.pred4 <- predict(backward, test, type = 'response')
+test.pred5 <- predict(stepwise, test, type = 'response')
+test.pred6 <- as.vector(predict(ridge_model, as.matrix(test[,-1]), s = cv_ridge$lambda.min))
+test.pred7 <- as.vector(predict(lasso_model, as.matrix(test[,-1]), s = cv_lasso$lambda.min))
+test.pred8 <- as.vector(predict(elastic_model, as.matrix(test[,-1]), s = cv_elastic$lambda.min))
+
+#table of results
+prediction <- data.frame(y = test$y, test.pred1, test.pred2, test.pred3, test.pred4, 
+                         test.pred5, test.pred6, test.pred7, test.pred8 )
+prediction
+
+# mean squared prediction error (MSPE)
+MSPE <- sapply(prediction[,-1], function(x){mean((x-test$y)^2)})
+#Mean absolute prediction error (MAE)
+MAE <- sapply(prediction[,-1], function(x){mean(abs(x-test$y))})
+#mean absolute percentage error(MAPE)
+MAPE <- sapply(prediction[,-1], function(x){mean(abs(x-test$y)/test$y)})
+#prediction measure (PM)
+PM <- sapply(prediction[,-1], function(x){sum((x-test$y)^2)/sum((test$y-mean(test$y))^2)})
+
+pred.error <- data.frame(MSPE, MAE, MAPE, PM)
+pred.error
+```
+
+
+
+
